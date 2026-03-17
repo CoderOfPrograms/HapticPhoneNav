@@ -4,16 +4,14 @@ Vue + Vite app that uses `web-haptics` and phone motion sensors to provide direc
 
 ## Features
 
-- Detects device heading and pocket up/down axis from motion sensors.
-- Continuous forward pulse while on course.
-- Distinct left and right turn buzz patterns.
-- Wrong-way alert with a heavier long buzz.
-- Auto wrong-way detection when heading drifts too far from calibrated forward direction.
-- Audio debug mode (uses `web-haptics` debug audio so patterns can be tested without phone vibration).
-- Route script playback mode for timed step-by-step haptic cues.
-- Live route import from public directional APIs:
-	- Nominatim (geocoding)
-	- OSRM (walking directions)
+- Exactly four haptic signals: `straight`, `left`, `right`, `wrong-way`.
+- Left and right patterns are high-contrast and directional.
+- Straight signal can emit from either top or bottom anchor button.
+- 3-second countdown pocket calibration to infer top/bottom orientation.
+- GPS-based heading checks with broad tolerance (does not micro-correct left/right drift).
+- Auto wrong-way detection only when heading is substantially off course.
+- Demo playback sequence: straight -> left -> straight -> right -> wrong-way.
+- Audio debug mode (uses `web-haptics` debug audio for non-vibration testing).
 
 ## Run
 
@@ -26,23 +24,21 @@ Open the dev URL from your phone on the same Wi-Fi.
 
 ## How To Use On Phone
 
-1. Tap `Enable Motion Sensors` (required on iOS).
-2. Stand facing your forward direction and place the phone in your pocket.
-3. Tap `Calibrate Forward + Pocket Up/Down`.
-4. Use `Start Forward Pulse`, `Cue Left Turn`, `Cue Right Turn`, or `Trigger Wrong-Way Alert`.
+1. Tap `Enable Motion + GPS`.
+2. Put the phone in your pocket and tap `Start 3s Pocket Countdown`.
+3. Let countdown complete to auto-select top or bottom straight emitter.
+4. Use `Top Straight Emitter` or `Bottom Straight Emitter`, plus `Strong Left`, `Strong Right`, and `Wrong-Way Alert`.
 5. Tap `Stop All Buzzing` to silence all patterns.
 
-## Route Script + API Mode
+## Demo Script Mode
 
-1. Use `Load Demo Script` for a built-in timed route.
-2. Or enter `Origin` and `Destination`, then tap `Load Real Route (OSM + OSRM API)`.
-3. Tap `Start Script Playback` to run haptic guidance through route steps.
-4. Turn on `Audio Debug Mode` to hear haptic patterns on devices without vibration.
+1. Tap `Start Demo Playback` for the built-in sequence.
+2. Tap `Stop Demo Playback` to end early.
+3. Tap `Reload Demo Sequence` to restore defaults.
 
 ## Notes
 
 - Haptics require mobile browser vibration support.
-- Compass heading quality varies by browser and environment.
-- Turn completion auto-detects when heading is close to the new turn target.
-- Public APIs can rate-limit or fail occasionally; use the demo script as fallback.
-- Google Maps Directions can be added later with your API key if needed.
+- GPS heading quality varies by speed and environment.
+- Slow movement can reduce heading availability; keep moving briefly if heading is missing.
+- Turn completion auto-detects when course is close to expected turn heading.

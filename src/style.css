@@ -184,6 +184,17 @@ p {
   border-color: rgba(241, 182, 75, 0.75);
 }
 
+.btn-anchor {
+  border-color: rgba(125, 245, 168, 0.8);
+  box-shadow: inset 0 0 0 1px rgba(125, 245, 168, 0.55);
+}
+
+.btn-live {
+  animation: pulse-hot 220ms ease;
+  background: linear-gradient(145deg, rgba(125, 245, 168, 0.28), rgba(125, 245, 168, 0.08));
+  border-color: rgba(125, 245, 168, 0.8);
+}
+
 .btn-danger {
   border-color: rgba(255, 127, 102, 0.75);
   color: #ffd5cb;
@@ -194,6 +205,18 @@ p {
   color: var(--text-soft);
   font-size: 0.82rem;
   line-height: 1.4;
+}
+
+.signal-pad {
+  margin-top: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.turn-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
 }
 
 .route-grid {
@@ -235,6 +258,17 @@ p {
   }
 }
 
+@keyframes pulse-hot {
+  from {
+    transform: scale(0.98);
+    filter: brightness(1);
+  }
+  to {
+    transform: scale(1);
+    filter: brightness(1.15);
+  }
+}
+
 @media (max-width: 760px) {
   .app-shell {
     width: min(640px, 96vw);
@@ -248,6 +282,10 @@ p {
 
   .grid,
   .button-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .turn-row {
     grid-template-columns: 1fr;
   }
 

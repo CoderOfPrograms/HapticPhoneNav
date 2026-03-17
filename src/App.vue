@@ -6,130 +6,127 @@ const hapticsOptions = reactive({ showSwitch: false, debug: false })
 const { trigger, cancel, isSupported } = useWebHaptics(hapticsOptions)
 
 const audioDebug = ref(false)
-
 const permissionState = ref('unknown')
+const locationState = ref('idle')
 const sensorListening = ref(false)
 
-const heading = ref(null)
 const tilt = ref({ beta: null, gamma: null })
 const gravity = ref({ x: null, y: null, z: null })
 
-const baselineHeading = ref(null)
-const baselineGravity = ref(null)
+const gps = ref({
+  lat: null,
+  lon: null,
+  heading: null,
+  speed: null,
+  accuracy: null,
+})
+
+const baselineCourse = ref(null)
+const pocketAnchor = ref('top')
+const pocketStatus = ref('Run countdown to detect top/bottom pocket direction.')
+const pocketCountdown = ref(0)
 
 const navMode = ref('stopped')
 const autoWrongWay = ref(false)
 const offCourseSince = ref(null)
-
 const currentSignal = ref('idle')
+const flashingButtonId = ref('')
 
 const routeScript = ref([
-  { mode: 'forward', durationMs: 8000, label: 'Walk straight' },
-  { mode: 'turn-left', durationMs: 3500, label: 'Turn left' },
-  { mode: 'forward', durationMs: 7000, label: 'Continue straight' },
-  { mode: 'turn-right', durationMs: 3500, label: 'Turn right' },
-  { mode: 'forward', durationMs: 6500, label: 'Approach destination' },
+  { mode: 'straight', durationMs: 6500, label: 'Go straight' },
+  { mode: 'left', durationMs: 2800, label: 'Turn left' },
+  { mode: 'straight', durationMs: 5200, label: 'Keep going straight' },
+  { mode: 'right', durationMs: 2800, label: 'Turn right' },
+  { mode: 'wrong', durationMs: 3200, label: 'Wrong-way warning' },
 ])
 
 const scriptStatus = ref('idle')
 const scriptStepIndex = ref(-1)
-const scriptMessage = ref('Loaded demo route script.')
-
-const originQuery = ref('Times Square, New York')
-const destinationQuery = ref('Central Park, New York')
-const routeLoading = ref(false)
-const routeError = ref('')
-const routeSummary = ref('')
+const scriptMessage = ref('Loaded demo script: straight, left, straight, right, wrong-way.')
 
 let listenersAttached = false
 let hapticLoop = null
 let scriptTimer = null
+let countdownTimer = null
+let flashTimer = null
+let locationWatchId = null
+let lastFix = null
 
 const HAPTIC_PATTERNS = {
-  forward: [
-    { duration: 90, intensity: 0.35 },
-    { delay: 220, duration: 90, intensity: 0.35 },
+  straight: [
+    { duration: 80, intensity: 0.7 },
+    { delay: 150, duration: 80, intensity: 0.7 },
   ],
   left: [
-    { duration: 55, intensity: 1 },
-    { delay: 80, duration: 25, intensity: 0.5 },
-    { delay: 80, duration: 55, intensity: 1 },
+    { duration: 200, intensity: 1 },
+    { delay: 45, duration: 90, intensity: 0.6 },
+    { delay: 45, duration: 55, intensity: 0.35 },
   ],
   right: [
-    { duration: 25, intensity: 0.5 },
-    { delay: 80, duration: 55, intensity: 1 },
-    { delay: 80, duration: 25, intensity: 0.5 },
-    { delay: 80, duration: 55, intensity: 1 },
+    { duration: 55, intensity: 0.35 },
+    { delay: 45, duration: 90, intensity: 0.6 },
+    { delay: 45, duration: 200, intensity: 1 },
   ],
-  wrong: [{ duration: 650, intensity: 1 }],
+  wrong: [
+    { duration: 420, intensity: 1 },
+    { delay: 100, duration: 420, intensity: 1 },
+  ],
 }
 
 const HAPTIC_INTERVAL_MS = {
-  forward: 950,
-  left: 900,
-  right: 900,
-  wrong: 1300,
+  straight: 920,
+  left: 1100,
+  right: 1100,
+  wrong: 1450,
 }
 
-const modeLabel = {
-  forward: 'Forward',
-  'turn-left': 'Turn Left',
-  'turn-right': 'Turn Right',
-  'wrong-way': 'Wrong Way',
-}
-
-const canCalibrate = computed(
-  () => heading.value !== null && gravity.value.x !== null,
-)
+const canCalibratePocket = computed(() => gravity.value.x !== null)
 
 const expectedHeading = computed(() => {
-  if (baselineHeading.value === null) return null
-
-  if (navMode.value === 'turn-left') {
-    return normalizeAngle(baselineHeading.value - 90)
-  }
-
-  if (navMode.value === 'turn-right') {
-    return normalizeAngle(baselineHeading.value + 90)
-  }
-
-  return baselineHeading.value
+  if (baselineCourse.value === null) return null
+  if (navMode.value === 'turn-left') return normalizeAngle(baselineCourse.value - 90)
+  if (navMode.value === 'turn-right') return normalizeAngle(baselineCourse.value + 90)
+  return baselineCourse.value
 })
 
-const headingError = computed(() => {
-  if (heading.value === null || expectedHeading.value === null) return null
-  return signedHeadingError(heading.value, expectedHeading.value)
+const courseError = computed(() => {
+  if (gps.value.heading === null || expectedHeading.value === null) return null
+  return signedHeadingError(gps.value.heading, expectedHeading.value)
 })
 
 const liveGravityLabel = computed(() => describeUpDown(gravity.value))
-const calibratedGravityLabel = computed(() => describeUpDown(baselineGravity.value))
+
+const headingLabel = computed(() => {
+  if (gps.value.heading === null) return 'No GPS heading yet'
+  return `${gps.value.heading.toFixed(1)} deg`
+})
 
 const guidanceLabel = computed(() => {
   if (navMode.value === 'stopped') return 'Stopped'
-  if (autoWrongWay.value) return 'Wrong-way alert'
-
+  if (autoWrongWay.value || navMode.value === 'wrong-way') return 'Wrong-way alert active'
   if (navMode.value === 'turn-left') return 'Turn left now'
   if (navMode.value === 'turn-right') return 'Turn right now'
 
-  if (headingError.value === null) return 'Move forward'
+  if (courseError.value === null) return 'Straight cue active'
 
-  const drift = headingError.value
-  if (Math.abs(drift) < 15) return 'On course'
-
-  return drift > 0 ? 'Drifting right' : 'Drifting left'
+  const absError = Math.abs(courseError.value)
+  if (absError <= 55) return 'GPS heading is in the right direction'
+  if (absError <= 95) return 'Still acceptable, keep moving forward'
+  return 'Wrong direction detected, rotate back'
 })
 
 const currentScriptStep = computed(() => {
   if (scriptStepIndex.value < 0 || scriptStepIndex.value >= routeScript.value.length) {
     return null
   }
+
   return routeScript.value[scriptStepIndex.value]
 })
 
 const scriptStepSummary = computed(() => {
   if (!currentScriptStep.value) return 'No active step'
   const step = currentScriptStep.value
-  return `${modeLabel[step.mode]} for ${Math.round(step.durationMs / 1000)}s`
+  return `${step.label} (${Math.round(step.durationMs / 1000)}s)`
 })
 
 const routeHasScript = computed(() => routeScript.value.length > 0)
@@ -142,6 +139,43 @@ function signedHeadingError(current, expected) {
   let delta = normalizeAngle(current - expected)
   if (delta > 180) delta -= 360
   return delta
+}
+
+function toRadians(value) {
+  return (value * Math.PI) / 180
+}
+
+function toDegrees(value) {
+  return (value * 180) / Math.PI
+}
+
+function distanceMeters(lat1, lon1, lat2, lon2) {
+  const earthRadius = 6371000
+  const dLat = toRadians(lat2 - lat1)
+  const dLon = toRadians(lon2 - lon1)
+
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRadians(lat1)) *
+      Math.cos(toRadians(lat2)) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2)
+
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+  return earthRadius * c
+}
+
+function bearingBetween(lat1, lon1, lat2, lon2) {
+  const phi1 = toRadians(lat1)
+  const phi2 = toRadians(lat2)
+  const dLon = toRadians(lon2 - lon1)
+
+  const y = Math.sin(dLon) * Math.cos(phi2)
+  const x =
+    Math.cos(phi1) * Math.sin(phi2) -
+    Math.sin(phi1) * Math.cos(phi2) * Math.cos(dLon)
+
+  return normalizeAngle(toDegrees(Math.atan2(y, x)))
 }
 
 function getDominantAxis(vector) {
@@ -168,6 +202,17 @@ function describeUpDown(vector) {
   return `Down: ${downSign}${dominant.axis} | Up: ${upSign}${dominant.axis}`
 }
 
+function inferPocketAnchor(vector) {
+  const dominant = getDominantAxis(vector)
+  if (!dominant) return null
+
+  if (dominant.axis === 'Y') {
+    return dominant.value >= 0 ? 'bottom' : 'top'
+  }
+
+  return dominant.value >= 0 ? 'top' : 'bottom'
+}
+
 function clearHapticLoop() {
   if (hapticLoop) {
     window.clearInterval(hapticLoop)
@@ -180,6 +225,38 @@ function clearScriptTimer() {
     window.clearTimeout(scriptTimer)
     scriptTimer = null
   }
+}
+
+function clearCountdownTimer() {
+  if (countdownTimer) {
+    window.clearInterval(countdownTimer)
+    countdownTimer = null
+  }
+}
+
+function clearFlashTimer() {
+  if (flashTimer) {
+    window.clearTimeout(flashTimer)
+    flashTimer = null
+  }
+}
+
+function flashButton(buttonId) {
+  flashingButtonId.value = buttonId
+  clearFlashTimer()
+  flashTimer = window.setTimeout(() => {
+    flashingButtonId.value = ''
+  }, 220)
+}
+
+function signalButtonId(signal) {
+  if (signal === 'straight') {
+    return pocketAnchor.value === 'bottom' ? 'straight-bottom' : 'straight-top'
+  }
+
+  if (signal === 'left') return 'left'
+  if (signal === 'right') return 'right'
+  return 'wrong'
 }
 
 function setAudioDebug(enabled) {
@@ -197,6 +274,7 @@ function setSignal(nextSignal) {
   if (nextSignal === 'idle' || !isSupported) return
 
   const fire = () => {
+    flashButton(signalButtonId(nextSignal))
     void trigger(HAPTIC_PATTERNS[nextSignal])
   }
 
@@ -225,16 +303,12 @@ function refreshGuidanceSignal() {
     return
   }
 
-  setSignal('forward')
+  setSignal('straight')
 }
 
-function ensureBaselineForGuidance() {
-  if (baselineHeading.value === null) {
-    baselineHeading.value = heading.value ?? 0
-  }
-
-  if (baselineGravity.value === null && gravity.value.x !== null) {
-    baselineGravity.value = { ...gravity.value }
+function ensureBaselineCourse() {
+  if (baselineCourse.value === null && gps.value.heading !== null) {
+    baselineCourse.value = gps.value.heading
   }
 }
 
@@ -244,23 +318,29 @@ function evaluateRouteProgress() {
     return
   }
 
-  if (heading.value === null || baselineHeading.value === null) return
-  if (navMode.value === 'stopped' || navMode.value === 'wrong-way') return
+  if (gps.value.heading === null || baselineCourse.value === null) {
+    refreshGuidanceSignal()
+    return
+  }
+
+  if (navMode.value === 'stopped' || navMode.value === 'wrong-way') {
+    refreshGuidanceSignal()
+    return
+  }
 
   const now = Date.now()
 
-  if (navMode.value === 'forward') {
-    const errorAbs = Math.abs(signedHeadingError(heading.value, baselineHeading.value))
+  if (navMode.value === 'straight') {
+    const errorAbs = Math.abs(signedHeadingError(gps.value.heading, baselineCourse.value))
 
-    if (errorAbs > 70) {
+    if (errorAbs > 110) {
       if (!offCourseSince.value) offCourseSince.value = now
-
-      if (now - offCourseSince.value > 1400) {
+      if (now - offCourseSince.value > 3000) {
         autoWrongWay.value = true
       }
     } else {
       offCourseSince.value = null
-      if (autoWrongWay.value && errorAbs < 25) {
+      if (autoWrongWay.value && errorAbs < 70) {
         autoWrongWay.value = false
       }
     }
@@ -268,14 +348,14 @@ function evaluateRouteProgress() {
 
   if (navMode.value === 'turn-left' || navMode.value === 'turn-right') {
     const target = expectedHeading.value
-    if (target === null) return
-
-    const turnError = signedHeadingError(heading.value, target)
-    if (Math.abs(turnError) < 18) {
-      baselineHeading.value = heading.value
-      navMode.value = 'forward'
-      autoWrongWay.value = false
-      offCourseSince.value = null
+    if (target !== null) {
+      const error = signedHeadingError(gps.value.heading, target)
+      if (Math.abs(error) < 32) {
+        baselineCourse.value = gps.value.heading
+        navMode.value = 'straight'
+        autoWrongWay.value = false
+        offCourseSince.value = null
+      }
     }
   }
 
@@ -286,24 +366,9 @@ function onOrientation(event) {
   if (typeof event.beta === 'number' || typeof event.gamma === 'number') {
     tilt.value = {
       beta: typeof event.beta === 'number' ? Number(event.beta.toFixed(1)) : null,
-      gamma:
-        typeof event.gamma === 'number' ? Number(event.gamma.toFixed(1)) : null,
+      gamma: typeof event.gamma === 'number' ? Number(event.gamma.toFixed(1)) : null,
     }
   }
-
-  let headingValue = null
-
-  if (typeof event.webkitCompassHeading === 'number') {
-    headingValue = event.webkitCompassHeading
-  } else if (typeof event.alpha === 'number') {
-    headingValue = event.alpha
-  }
-
-  if (headingValue !== null) {
-    heading.value = Number(normalizeAngle(headingValue).toFixed(1))
-  }
-
-  evaluateRouteProgress()
 }
 
 function onMotion(event) {
@@ -325,6 +390,34 @@ function onMotion(event) {
   }
 }
 
+function onLocation(position) {
+  const { latitude, longitude, heading, speed, accuracy } = position.coords
+  let nextHeading = typeof heading === 'number' && !Number.isNaN(heading) ? normalizeAngle(heading) : null
+
+  if (nextHeading === null && lastFix) {
+    const moved = distanceMeters(lastFix.lat, lastFix.lon, latitude, longitude)
+    if (moved >= 3) {
+      nextHeading = bearingBetween(lastFix.lat, lastFix.lon, latitude, longitude)
+    }
+  }
+
+  gps.value = {
+    lat: Number(latitude.toFixed(6)),
+    lon: Number(longitude.toFixed(6)),
+    heading: nextHeading === null ? gps.value.heading : Number(nextHeading.toFixed(1)),
+    speed: typeof speed === 'number' && !Number.isNaN(speed) ? Number(speed.toFixed(2)) : null,
+    accuracy: typeof accuracy === 'number' ? Number(accuracy.toFixed(1)) : null,
+  }
+
+  lastFix = { lat: latitude, lon: longitude }
+  locationState.value = 'watching'
+  evaluateRouteProgress()
+}
+
+function onLocationError() {
+  locationState.value = 'denied'
+}
+
 function attachSensorListeners() {
   if (listenersAttached) return
 
@@ -341,6 +434,28 @@ function detachSensorListeners() {
   window.removeEventListener('devicemotion', onMotion, true)
   listenersAttached = false
   sensorListening.value = false
+}
+
+function attachLocationWatcher() {
+  if (!('geolocation' in navigator)) {
+    locationState.value = 'unsupported'
+    return
+  }
+
+  if (locationWatchId !== null) return
+
+  locationState.value = 'watching'
+  locationWatchId = navigator.geolocation.watchPosition(onLocation, onLocationError, {
+    enableHighAccuracy: true,
+    maximumAge: 1000,
+    timeout: 12000,
+  })
+}
+
+function detachLocationWatcher() {
+  if (locationWatchId === null) return
+  navigator.geolocation.clearWatch(locationWatchId)
+  locationWatchId = null
 }
 
 async function enableSensors() {
@@ -368,6 +483,7 @@ async function enableSensors() {
 
     permissionState.value = 'granted'
     attachSensorListeners()
+    attachLocationWatcher()
   } catch {
     permissionState.value = 'denied'
   }
@@ -388,49 +504,77 @@ function autoStartSensorsIfPossible() {
 
   permissionState.value = 'granted'
   attachSensorListeners()
+  attachLocationWatcher()
 }
 
-function calibratePocketFrame() {
-  if (!canCalibrate.value) return
-
-  baselineHeading.value = heading.value
-  baselineGravity.value = { ...gravity.value }
-  offCourseSince.value = null
-  autoWrongWay.value = false
-  navMode.value = 'forward'
-  refreshGuidanceSignal()
+function setPocketAnchor(anchor) {
+  pocketAnchor.value = anchor
+  pocketStatus.value =
+    anchor === 'top'
+      ? 'Top emitter selected for straight pulses.'
+      : 'Bottom emitter selected for straight pulses.'
 }
 
-function startForward() {
-  if (baselineHeading.value === null && canCalibrate.value) {
-    calibratePocketFrame()
+function finalizePocketCalibration() {
+  const inferred = inferPocketAnchor(gravity.value)
+  if (!inferred) {
+    pocketStatus.value = 'Could not detect orientation yet. Keep phone still and retry.'
     return
   }
 
-  if (baselineHeading.value === null) return
+  setPocketAnchor(inferred)
+}
 
-  navMode.value = 'forward'
+function startPocketCountdown() {
+  if (!canCalibratePocket.value) {
+    pocketStatus.value = 'Waiting for motion data before countdown.'
+    return
+  }
+
+  clearCountdownTimer()
+  pocketCountdown.value = 3
+  pocketStatus.value = 'Hold still. Detecting pocket direction...'
+
+  countdownTimer = window.setInterval(() => {
+    pocketCountdown.value -= 1
+
+    if (pocketCountdown.value <= 0) {
+      clearCountdownTimer()
+      finalizePocketCalibration()
+    }
+  }, 1000)
+}
+
+function startStraight() {
+  ensureBaselineCourse()
+
+  navMode.value = 'straight'
   offCourseSince.value = null
   autoWrongWay.value = false
   refreshGuidanceSignal()
 }
 
+function startStraightFromAnchor(anchor) {
+  setPocketAnchor(anchor)
+  startStraight()
+}
+
 function cueLeftTurn() {
-  ensureBaselineForGuidance()
+  ensureBaselineCourse()
   navMode.value = 'turn-left'
   autoWrongWay.value = false
   refreshGuidanceSignal()
 }
 
 function cueRightTurn() {
-  ensureBaselineForGuidance()
+  ensureBaselineCourse()
   navMode.value = 'turn-right'
   autoWrongWay.value = false
   refreshGuidanceSignal()
 }
 
 function triggerWrongWay() {
-  ensureBaselineForGuidance()
+  ensureBaselineCourse()
   navMode.value = 'wrong-way'
   autoWrongWay.value = true
   refreshGuidanceSignal()
@@ -447,7 +591,7 @@ function normalizeScriptMode(mode) {
   if (mode === 'left' || mode === 'turn-left') return 'turn-left'
   if (mode === 'right' || mode === 'turn-right') return 'turn-right'
   if (mode === 'wrong' || mode === 'wrong-way') return 'wrong-way'
-  return 'forward'
+  return 'straight'
 }
 
 function applyGuidanceMode(mode) {
@@ -468,7 +612,7 @@ function applyGuidanceMode(mode) {
     return
   }
 
-  startForward()
+  startStraight()
 }
 
 function runScriptStep(index) {
@@ -477,7 +621,7 @@ function runScriptStep(index) {
   if (index >= routeScript.value.length) {
     scriptStatus.value = 'finished'
     scriptStepIndex.value = -1
-    scriptMessage.value = 'Route script finished.'
+    scriptMessage.value = 'Demo script finished.'
     stopGuidance()
     clearScriptTimer()
     return
@@ -496,11 +640,11 @@ function runScriptStep(index) {
 
 function startRouteScript() {
   if (!routeHasScript.value) {
-    scriptMessage.value = 'No route script loaded.'
+    scriptMessage.value = 'No script loaded.'
     return
   }
 
-  ensureBaselineForGuidance()
+  ensureBaselineCourse()
   scriptStatus.value = 'running'
   runScriptStep(0)
 }
@@ -509,141 +653,20 @@ function stopRouteScript() {
   clearScriptTimer()
   scriptStatus.value = 'idle'
   scriptStepIndex.value = -1
-  scriptMessage.value = 'Route script stopped.'
+  scriptMessage.value = 'Demo script stopped.'
   stopGuidance()
 }
 
 function resetDemoScript() {
   routeScript.value = [
-    { mode: 'forward', durationMs: 8000, label: 'Walk straight' },
-    { mode: 'turn-left', durationMs: 3500, label: 'Turn left' },
-    { mode: 'forward', durationMs: 7000, label: 'Continue straight' },
-    { mode: 'turn-right', durationMs: 3500, label: 'Turn right' },
-    { mode: 'forward', durationMs: 6500, label: 'Approach destination' },
+    { mode: 'straight', durationMs: 6500, label: 'Go straight' },
+    { mode: 'left', durationMs: 2800, label: 'Turn left' },
+    { mode: 'straight', durationMs: 5200, label: 'Keep going straight' },
+    { mode: 'right', durationMs: 2800, label: 'Turn right' },
+    { mode: 'wrong', durationMs: 3200, label: 'Wrong-way warning' },
   ]
-  routeSummary.value = 'Demo script loaded.'
-  routeError.value = ''
-  scriptMessage.value = 'Loaded demo route script.'
-}
 
-async function geocodePlace(query) {
-  const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(query)}`
-  const response = await fetch(url)
-
-  if (!response.ok) {
-    throw new Error(`Geocoding failed (${response.status})`)
-  }
-
-  const results = await response.json()
-  if (!Array.isArray(results) || results.length === 0) {
-    throw new Error(`No location found for "${query}"`)
-  }
-
-  const place = results[0]
-  return {
-    lat: Number(place.lat),
-    lon: Number(place.lon),
-    name: place.display_name,
-  }
-}
-
-function mapManeuverToMode(step) {
-  const modifier = String(step?.maneuver?.modifier ?? '').toLowerCase()
-  const type = String(step?.maneuver?.type ?? '').toLowerCase()
-
-  if (modifier.includes('left')) return 'turn-left'
-  if (modifier.includes('right')) return 'turn-right'
-  if (modifier.includes('uturn') || type === 'uturn') return 'wrong-way'
-  return 'forward'
-}
-
-function formatStepLabel(step, fallbackMode) {
-  const instruction = step?.name ? `via ${step.name}` : 'follow route'
-
-  if (fallbackMode === 'turn-left') return `Turn left ${instruction}`
-  if (fallbackMode === 'turn-right') return `Turn right ${instruction}`
-  if (fallbackMode === 'wrong-way') return `U-turn ${instruction}`
-
-  const meters = Math.round(Number(step?.distance ?? 0))
-  return `Go forward ${meters > 0 ? `${meters}m` : ''}`.trim()
-}
-
-function buildRouteScriptFromOsrm(steps) {
-  const script = []
-
-  for (const step of steps) {
-    const durationMs = Math.round(Number(step.duration ?? 0) * 1000)
-    const clampedForwardMs = Math.min(13000, Math.max(2500, durationMs))
-
-    if (durationMs >= 1200) {
-      script.push({
-        mode: 'forward',
-        durationMs: clampedForwardMs,
-        label: formatStepLabel(step, 'forward'),
-      })
-    }
-
-    const turnMode = mapManeuverToMode(step)
-    if (turnMode !== 'forward') {
-      script.push({
-        mode: turnMode,
-        durationMs: turnMode === 'wrong-way' ? 3000 : 2600,
-        label: formatStepLabel(step, turnMode),
-      })
-    }
-  }
-
-  return script
-}
-
-async function loadRouteFromApi() {
-  if (!originQuery.value.trim() || !destinationQuery.value.trim()) {
-    routeError.value = 'Enter both origin and destination.'
-    return
-  }
-
-  routeLoading.value = true
-  routeError.value = ''
-
-  try {
-    const [origin, destination] = await Promise.all([
-      geocodePlace(originQuery.value.trim()),
-      geocodePlace(destinationQuery.value.trim()),
-    ])
-
-    const routeUrl =
-      `https://router.project-osrm.org/route/v1/walking/` +
-      `${origin.lon},${origin.lat};${destination.lon},${destination.lat}` +
-      `?overview=false&steps=true`
-
-    const response = await fetch(routeUrl)
-    if (!response.ok) {
-      throw new Error(`Routing failed (${response.status})`)
-    }
-
-    const payload = await response.json()
-    const route = payload?.routes?.[0]
-    const steps = route?.legs?.[0]?.steps
-
-    if (!Array.isArray(steps) || steps.length === 0) {
-      throw new Error('Route API returned no steps.')
-    }
-
-    const builtScript = buildRouteScriptFromOsrm(steps)
-    if (builtScript.length === 0) {
-      throw new Error('Could not derive haptic script from route steps.')
-    }
-
-    routeScript.value = builtScript
-    routeSummary.value =
-      `${Math.round(route.distance)}m, ${Math.round(route.duration / 60)} min, ` +
-      `${builtScript.length} haptic steps`
-    scriptMessage.value = 'Loaded script from live routing API.'
-  } catch (error) {
-    routeError.value = error instanceof Error ? error.message : 'Route fetch failed.'
-  } finally {
-    routeLoading.value = false
-  }
+  scriptMessage.value = 'Loaded demo script: straight, left, straight, right, wrong-way.'
 }
 
 autoStartSensorsIfPossible()
@@ -651,8 +674,11 @@ autoStartSensorsIfPossible()
 onBeforeUnmount(() => {
   clearScriptTimer()
   clearHapticLoop()
+  clearCountdownTimer()
+  clearFlashTimer()
   cancel()
   detachSensorListeners()
+  detachLocationWatcher()
 })
 </script>
 
@@ -660,124 +686,141 @@ onBeforeUnmount(() => {
   <main class="app-shell">
     <section class="panel hero">
       <p class="eyebrow">TextHeartbeat</p>
-      <h1>Pocket Navigation Haptics</h1>
+      <h1>4-Signal Pocket Navigator</h1>
       <p class="lead">
-        Calibrate once while facing forward. The app keeps a continuous forward buzz,
-        switches to left/right turn buzzes, and pushes a heavy wrong-way alert when
-        your heading drifts too far.
+        Four haptic signals only: straight, left, right, and wrong-way. Straight pulses
+        auto-emit from the top or bottom button based on pocket direction.
       </p>
       <div class="pill-row">
         <span class="pill" :class="{ ok: sensorListening }">
           Sensors: {{ sensorListening ? 'Live' : 'Not listening' }}
         </span>
         <span class="pill" :class="{ ok: permissionState === 'granted' }">
-          Permission: {{ permissionState }}
+          Motion Permission: {{ permissionState }}
+        </span>
+        <span class="pill" :class="{ ok: locationState === 'watching' }">
+          GPS: {{ locationState }}
         </span>
         <span class="pill" :class="{ ok: isSupported }">
           Vibration API: {{ isSupported ? 'Supported' : 'Unavailable' }}
         </span>
-        <span class="pill" :class="{ ok: audioDebug }">
-          Audio Debug: {{ audioDebug ? 'On' : 'Off' }}
-        </span>
       </div>
-      <div class="button-grid one-line">
+      <div class="pill-row">
+        <span class="pill">GPS Heading: {{ headingLabel }}</span>
+        <span class="pill">Accuracy: {{ gps.accuracy !== null ? `${gps.accuracy}m` : '-' }}</span>
+        <span class="pill">Pocket Anchor: {{ pocketAnchor === 'top' ? 'Top' : 'Bottom' }}</span>
+      </div>
+      <div class="button-grid">
         <button class="btn" @click="setAudioDebug(!audioDebug)">
           {{ audioDebug ? 'Disable' : 'Enable' }} Audio Debug Mode
         </button>
+        <button class="btn btn-primary" @click="enableSensors">
+          Enable Motion + GPS
+        </button>
       </div>
-      <button
-        v-if="permissionState !== 'granted'"
-        class="btn btn-primary"
-        @click="enableSensors"
-      >
-        Enable Motion Sensors
-      </button>
     </section>
 
     <section class="panel stats">
-      <h2>Live Orientation</h2>
+      <h2>Pocket Direction Setup</h2>
       <div class="grid">
         <article>
-          <h3>Heading</h3>
-          <p>{{ heading !== null ? `${heading}°` : 'No data yet' }}</p>
+          <h3>Live Up/Down Axis</h3>
+          <p>{{ liveGravityLabel }}</p>
         </article>
         <article>
           <h3>Tilt</h3>
           <p>
-            beta {{ tilt.beta !== null ? `${tilt.beta}°` : '-' }}
-            | gamma {{ tilt.gamma !== null ? `${tilt.gamma}°` : '-' }}
+            beta {{ tilt.beta !== null ? `${tilt.beta} deg` : '-' }}
+            | gamma {{ tilt.gamma !== null ? `${tilt.gamma} deg` : '-' }}
           </p>
         </article>
-        <article>
-          <h3>Detected Up/Down (live)</h3>
-          <p>{{ liveGravityLabel }}</p>
-        </article>
-        <article>
-          <h3>Calibrated Pocket Frame</h3>
-          <p>{{ calibratedGravityLabel }}</p>
-        </article>
       </div>
+      <div class="button-grid">
+        <button class="btn btn-primary" :disabled="!canCalibratePocket" @click="startPocketCountdown">
+          {{ pocketCountdown > 0 ? `Detecting in ${pocketCountdown}` : 'Start 3s Pocket Countdown' }}
+        </button>
+        <button class="btn" @click="setPocketAnchor('top')">Use Top Anchor</button>
+        <button class="btn" @click="setPocketAnchor('bottom')">Use Bottom Anchor</button>
+      </div>
+      <p class="hint">{{ pocketStatus }}</p>
     </section>
 
     <section class="panel controls">
-      <h2>Guidance Controls</h2>
+      <h2>Haptic Signal Console</h2>
       <p class="current-state">{{ guidanceLabel }}</p>
-      <div class="button-grid">
-        <button class="btn btn-primary" :disabled="!canCalibrate" @click="calibratePocketFrame">
-          Calibrate Forward + Pocket Up/Down
+
+      <div class="signal-pad">
+        <button
+          class="btn btn-primary"
+          :class="{
+            'btn-live': flashingButtonId === 'straight-top',
+            'btn-anchor': pocketAnchor === 'top',
+          }"
+          @click="startStraightFromAnchor('top')"
+        >
+          Top Straight Emitter
         </button>
-        <button class="btn" :disabled="baselineHeading === null" @click="startForward">
-          Start Forward Pulse
+
+        <div class="turn-row">
+          <button
+            class="btn"
+            :class="{ 'btn-live': flashingButtonId === 'left' }"
+            @click="cueLeftTurn"
+          >
+            Strong Left
+          </button>
+          <button
+            class="btn"
+            :class="{ 'btn-live': flashingButtonId === 'right' }"
+            @click="cueRightTurn"
+          >
+            Strong Right
+          </button>
+        </div>
+
+        <button
+          class="btn btn-primary"
+          :class="{
+            'btn-live': flashingButtonId === 'straight-bottom',
+            'btn-anchor': pocketAnchor === 'bottom',
+          }"
+          @click="startStraightFromAnchor('bottom')"
+        >
+          Bottom Straight Emitter
         </button>
-        <button class="btn" :disabled="baselineHeading === null" @click="cueLeftTurn">
-          Cue Left Turn
+
+        <button
+          class="btn btn-danger"
+          :class="{ 'btn-live': flashingButtonId === 'wrong' }"
+          @click="triggerWrongWay"
+        >
+          Wrong-Way Alert
         </button>
-        <button class="btn" :disabled="baselineHeading === null" @click="cueRightTurn">
-          Cue Right Turn
-        </button>
-        <button class="btn btn-danger" :disabled="baselineHeading === null" @click="triggerWrongWay">
-          Trigger Wrong-Way Alert
-        </button>
+
         <button class="btn" @click="stopGuidance">Stop All Buzzing</button>
       </div>
+
       <p class="hint">
-        Wrong-way auto-triggers when forward heading is off by more than ~70 degrees
-        for ~1.4s, and clears once you recover near the baseline.
+        Left and right patterns are intentionally asymmetric and high contrast. GPS course is
+        treated with broad tolerance, so slight heading wobble does not trigger side drift cues.
       </p>
     </section>
 
     <section class="panel controls">
-      <h2>Route Script Mode</h2>
+      <h2>Demo Script</h2>
       <p class="current-state">{{ scriptStatus === 'running' ? scriptStepSummary : scriptMessage }}</p>
       <div class="button-grid">
         <button class="btn btn-primary" :disabled="scriptStatus === 'running' || !routeHasScript" @click="startRouteScript">
-          Start Script Playback
+          Start Demo Playback
         </button>
         <button class="btn" :disabled="scriptStatus !== 'running'" @click="stopRouteScript">
-          Stop Script Playback
+          Stop Demo Playback
         </button>
         <button class="btn" :disabled="scriptStatus === 'running'" @click="resetDemoScript">
-          Load Demo Script
+          Reload Demo Sequence
         </button>
       </div>
-      <p class="hint">Current steps: {{ routeScript.length }}. {{ routeSummary || 'No route summary yet.' }}</p>
-      <div class="grid route-grid">
-        <article>
-          <h3>Origin</h3>
-          <input v-model="originQuery" class="route-input" type="text" placeholder="Start location" />
-        </article>
-        <article>
-          <h3>Destination</h3>
-          <input v-model="destinationQuery" class="route-input" type="text" placeholder="Destination" />
-        </article>
-      </div>
-      <div class="button-grid one-line">
-        <button class="btn btn-primary" :disabled="routeLoading || scriptStatus === 'running'" @click="loadRouteFromApi">
-          {{ routeLoading ? 'Loading Route...' : 'Load Real Route (OSM + OSRM API)' }}
-        </button>
-      </div>
-      <p v-if="routeError" class="error-text">{{ routeError }}</p>
-      <p class="hint">This uses real routing APIs (Nominatim geocoding + OSRM directions), then converts maneuvers into haptic cues.</p>
+      <p class="hint">Sequence: straight -> left -> straight -> right -> wrong-way.</p>
     </section>
   </main>
 </template>
