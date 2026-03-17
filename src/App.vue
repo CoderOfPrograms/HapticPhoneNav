@@ -1,11 +1,7 @@
 <script setup>
-import { computed, onBeforeUnmount, reactive, ref } from 'vue'
-import { useWebHaptics } from 'web-haptics/vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
+import { triggerHaptic } from 'tactus'
 
-const hapticsOptions = reactive({ showSwitch: false, debug: false })
-const { trigger, cancel, isSupported } = useWebHaptics(hapticsOptions)
-
-const audioDebug = ref(false)
 const permissionState = ref('unknown')
 const locationState = ref('idle')
 const sensorListening = ref(false)
@@ -30,7 +26,8 @@ const navMode = ref('stopped')
 const autoWrongWay = ref(false)
 const offCourseSince = ref(null)
 const currentSignal = ref('idle')
-const flashingButtonId = ref('')
+
+const activePads = ref([])
 
 const routeScript = ref([
   { mode: 'straight', durationMs: 6500, label: 'Go straight' },
@@ -51,33 +48,13 @@ let countdownTimer = null
 let flashTimer = null
 let locationWatchId = null
 let lastFix = null
-
-const HAPTIC_PATTERNS = {
-  straight: [
-    { duration: 80, intensity: 0.7 },
-    { delay: 150, duration: 80, intensity: 0.7 },
-  ],
-  left: [
-    { duration: 200, intensity: 1 },
-    { delay: 45, duration: 90, intensity: 0.6 },
-    { delay: 45, duration: 55, intensity: 0.35 },
-  ],
-  right: [
-    { duration: 55, intensity: 0.35 },
-    { delay: 45, duration: 90, intensity: 0.6 },
-    { delay: 45, duration: 200, intensity: 1 },
-  ],
-  wrong: [
-    { duration: 420, intensity: 1 },
-    { delay: 100, duration: 420, intensity: 1 },
-  ],
-}
+let patternTimeouts = []
 
 const HAPTIC_INTERVAL_MS = {
-  straight: 920,
-  left: 1100,
-  right: 1100,
-  wrong: 1450,
+  straight: 1200,
+  left: 1320,
+  right: 1320,
+  wrong: 1850,
 }
 
 const canCalibratePocket = computed(() => gravity.value.x !== null)
@@ -241,45 +218,94 @@ function clearFlashTimer() {
   }
 }
 
-function flashButton(buttonId) {
-  flashingButtonId.value = buttonId
+function clearPatternTimeouts() {
+  patternTimeouts.forEach((timeoutId) => window.clearTimeout(timeoutId))
+  patternTimeouts = []
+}
+
+function flashPads(pads) {
+  activePads.value = pads
   clearFlashTimer()
   flashTimer = window.setTimeout(() => {
-    flashingButtonId.value = ''
-  }, 220)
+    activePads.value = []
+  }, 210)
 }
 
-function signalButtonId(signal) {
-  if (signal === 'straight') {
-    return pocketAnchor.value === 'bottom' ? 'straight-bottom' : 'straight-top'
+function isPadLive(pad) {
+  return activePads.value.includes(pad)
+}
+
+function pulsePads(pads, durationMs) {
+  flashPads(pads)
+  try {
+    triggerHaptic(durationMs)
+  } catch {
+    // Ignore browser/device haptic failures.
+  }
+}
+
+function buildPattern(signal) {
+  const straightPad = pocketAnchor.value === 'bottom' ? 'bottom' : 'top'
+
+  if (signal === 'left') {
+    return [
+      { at: 0, durationMs: 260, pads: ['left'] },
+      { at: 190, durationMs: 170, pads: ['left'] },
+      { at: 330, durationMs: 90, pads: ['left'] },
+    ]
   }
 
-  if (signal === 'left') return 'left'
-  if (signal === 'right') return 'right'
-  return 'wrong'
+  if (signal === 'right') {
+    return [
+      { at: 0, durationMs: 90, pads: ['right'] },
+      { at: 140, durationMs: 170, pads: ['right'] },
+      { at: 330, durationMs: 260, pads: ['right'] },
+    ]
+  }
+
+  if (signal === 'wrong') {
+    return [
+      { at: 0, durationMs: 320, pads: ['top', 'bottom'] },
+      { at: 370, durationMs: 320, pads: ['left', 'right'] },
+      { at: 740, durationMs: 320, pads: ['top', 'bottom'] },
+      { at: 1110, durationMs: 320, pads: ['left', 'right'] },
+    ]
+  }
+
+  return [
+    { at: 0, durationMs: 210, pads: [straightPad] },
+    { at: 240, durationMs: 210, pads: [straightPad] },
+  ]
 }
 
-function setAudioDebug(enabled) {
-  audioDebug.value = enabled
-  hapticsOptions.debug = enabled
+function runPattern(signal) {
+  clearPatternTimeouts()
+  const pattern = buildPattern(signal)
+
+  pattern.forEach((step) => {
+    const timeoutId = window.setTimeout(() => {
+      pulsePads(step.pads, step.durationMs)
+    }, step.at)
+    patternTimeouts.push(timeoutId)
+  })
 }
 
-function setSignal(nextSignal) {
-  if (currentSignal.value === nextSignal) return
+function setSignal(nextSignal, force = false) {
+  if (currentSignal.value === nextSignal && !force) return
 
   currentSignal.value = nextSignal
   clearHapticLoop()
-  cancel()
+  clearPatternTimeouts()
 
-  if (nextSignal === 'idle' || !isSupported) return
-
-  const fire = () => {
-    flashButton(signalButtonId(nextSignal))
-    void trigger(HAPTIC_PATTERNS[nextSignal])
+  if (nextSignal === 'idle') {
+    activePads.value = []
+    return
   }
 
-  fire()
-  hapticLoop = window.setInterval(fire, HAPTIC_INTERVAL_MS[nextSignal])
+  runPattern(nextSignal)
+  hapticLoop = window.setInterval(() => {
+    runPattern(nextSignal)
+  }, HAPTIC_INTERVAL_MS[nextSignal])
 }
 
 function refreshGuidanceSignal() {
@@ -513,6 +539,10 @@ function setPocketAnchor(anchor) {
     anchor === 'top'
       ? 'Top emitter selected for straight pulses.'
       : 'Bottom emitter selected for straight pulses.'
+
+  if (currentSignal.value === 'straight') {
+    setSignal('straight', true)
+  }
 }
 
 function finalizePocketCalibration() {
@@ -547,7 +577,6 @@ function startPocketCountdown() {
 
 function startStraight() {
   ensureBaselineCourse()
-
   navMode.value = 'straight'
   offCourseSince.value = null
   autoWrongWay.value = false
@@ -674,22 +703,22 @@ autoStartSensorsIfPossible()
 onBeforeUnmount(() => {
   clearScriptTimer()
   clearHapticLoop()
+  clearPatternTimeouts()
   clearCountdownTimer()
   clearFlashTimer()
-  cancel()
   detachSensorListeners()
   detachLocationWatcher()
 })
 </script>
 
 <template>
-  <main class="app-shell">
+  <main class="app-shell edge-safe">
     <section class="panel hero">
       <p class="eyebrow">TextHeartbeat</p>
-      <h1>4-Signal Pocket Navigator</h1>
+      <h1>Tactus Edge Navigator</h1>
       <p class="lead">
-        Four haptic signals only: straight, left, right, and wrong-way. Straight pulses
-        auto-emit from the top or bottom button based on pocket direction.
+        Tactus drives the haptics now. Four fixed emitters stay on-screen at top, bottom,
+        left, and right so every pattern has a clear source point.
       </p>
       <div class="pill-row">
         <span class="pill" :class="{ ok: sensorListening }">
@@ -701,19 +730,14 @@ onBeforeUnmount(() => {
         <span class="pill" :class="{ ok: locationState === 'watching' }">
           GPS: {{ locationState }}
         </span>
-        <span class="pill" :class="{ ok: isSupported }">
-          Vibration API: {{ isSupported ? 'Supported' : 'Unavailable' }}
-        </span>
+        <span class="pill ok">Engine: tactus</span>
       </div>
       <div class="pill-row">
         <span class="pill">GPS Heading: {{ headingLabel }}</span>
         <span class="pill">Accuracy: {{ gps.accuracy !== null ? `${gps.accuracy}m` : '-' }}</span>
-        <span class="pill">Pocket Anchor: {{ pocketAnchor === 'top' ? 'Top' : 'Bottom' }}</span>
+        <span class="pill">Straight Anchor: {{ pocketAnchor === 'top' ? 'Top' : 'Bottom' }}</span>
       </div>
-      <div class="button-grid">
-        <button class="btn" @click="setAudioDebug(!audioDebug)">
-          {{ audioDebug ? 'Disable' : 'Enable' }} Audio Debug Mode
-        </button>
+      <div class="button-grid one-line">
         <button class="btn btn-primary" @click="enableSensors">
           Enable Motion + GPS
         </button>
@@ -739,70 +763,23 @@ onBeforeUnmount(() => {
         <button class="btn btn-primary" :disabled="!canCalibratePocket" @click="startPocketCountdown">
           {{ pocketCountdown > 0 ? `Detecting in ${pocketCountdown}` : 'Start 3s Pocket Countdown' }}
         </button>
-        <button class="btn" @click="setPocketAnchor('top')">Use Top Anchor</button>
-        <button class="btn" @click="setPocketAnchor('bottom')">Use Bottom Anchor</button>
+        <button class="btn" @click="setPocketAnchor('top')">Use Top For Straight</button>
+        <button class="btn" @click="setPocketAnchor('bottom')">Use Bottom For Straight</button>
       </div>
       <p class="hint">{{ pocketStatus }}</p>
     </section>
 
     <section class="panel controls">
-      <h2>Haptic Signal Console</h2>
+      <h2>Guidance Controls</h2>
       <p class="current-state">{{ guidanceLabel }}</p>
-
-      <div class="signal-pad">
-        <button
-          class="btn btn-primary"
-          :class="{
-            'btn-live': flashingButtonId === 'straight-top',
-            'btn-anchor': pocketAnchor === 'top',
-          }"
-          @click="startStraightFromAnchor('top')"
-        >
-          Top Straight Emitter
-        </button>
-
-        <div class="turn-row">
-          <button
-            class="btn"
-            :class="{ 'btn-live': flashingButtonId === 'left' }"
-            @click="cueLeftTurn"
-          >
-            Strong Left
-          </button>
-          <button
-            class="btn"
-            :class="{ 'btn-live': flashingButtonId === 'right' }"
-            @click="cueRightTurn"
-          >
-            Strong Right
-          </button>
-        </div>
-
-        <button
-          class="btn btn-primary"
-          :class="{
-            'btn-live': flashingButtonId === 'straight-bottom',
-            'btn-anchor': pocketAnchor === 'bottom',
-          }"
-          @click="startStraightFromAnchor('bottom')"
-        >
-          Bottom Straight Emitter
-        </button>
-
-        <button
-          class="btn btn-danger"
-          :class="{ 'btn-live': flashingButtonId === 'wrong' }"
-          @click="triggerWrongWay"
-        >
-          Wrong-Way Alert
-        </button>
-
+      <div class="button-grid">
+        <button class="btn btn-primary" @click="startStraight">Start Straight (Auto Anchor)</button>
+        <button class="btn" @click="triggerWrongWay">Trigger Wrong-Way</button>
         <button class="btn" @click="stopGuidance">Stop All Buzzing</button>
       </div>
-
       <p class="hint">
-        Left and right patterns are intentionally asymmetric and high contrast. GPS course is
-        treated with broad tolerance, so slight heading wobble does not trigger side drift cues.
+        Left and right stay very distinct: left is heavy-first and right is heavy-last.
+        Wrong-way alternates top/bottom against left/right for a strong alarm feel.
       </p>
     </section>
 
@@ -823,4 +800,38 @@ onBeforeUnmount(() => {
       <p class="hint">Sequence: straight -> left -> straight -> right -> wrong-way.</p>
     </section>
   </main>
+
+  <div class="edge-pad-layer">
+    <button
+      class="edge-pad edge-top"
+      :class="{ live: isPadLive('top'), anchor: pocketAnchor === 'top' }"
+      @click="startStraightFromAnchor('top')"
+    >
+      TOP STRAIGHT
+    </button>
+
+    <button
+      class="edge-pad edge-left"
+      :class="{ live: isPadLive('left') }"
+      @click="cueLeftTurn"
+    >
+      LEFT
+    </button>
+
+    <button
+      class="edge-pad edge-right"
+      :class="{ live: isPadLive('right') }"
+      @click="cueRightTurn"
+    >
+      RIGHT
+    </button>
+
+    <button
+      class="edge-pad edge-bottom"
+      :class="{ live: isPadLive('bottom'), anchor: pocketAnchor === 'bottom' }"
+      @click="startStraightFromAnchor('bottom')"
+    >
+      BOTTOM STRAIGHT
+    </button>
+  </div>
 </template>
