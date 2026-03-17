@@ -1,0 +1,257 @@
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&family=Space+Grotesk:wght@400;500;700&display=swap');
+
+:root {
+  --bg-deep: #071a24;
+  --bg-mid: #0d2e38;
+  --bg-glow: #1d5d5d;
+  --panel: rgba(6, 24, 34, 0.78);
+  --panel-strong: rgba(6, 24, 34, 0.92);
+  --line: rgba(173, 242, 231, 0.25);
+  --text: #daf6ee;
+  --text-soft: #a8d3cb;
+  --primary: #f1b64b;
+  --danger: #ff7f66;
+  --ok: #7df5a8;
+  --shadow: 0 16px 60px rgba(0, 0, 0, 0.35);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100svh;
+  background:
+    radial-gradient(circle at 8% 12%, rgba(125, 245, 168, 0.2), transparent 32%),
+    radial-gradient(circle at 92% 0%, rgba(241, 182, 75, 0.25), transparent 28%),
+    linear-gradient(165deg, var(--bg-deep), var(--bg-mid) 52%, var(--bg-glow));
+  color: var(--text);
+  font-family: 'Space Grotesk', 'Segoe UI', sans-serif;
+}
+
+#app {
+  min-height: 100svh;
+}
+
+.app-shell {
+  width: min(920px, 94vw);
+  margin: 0 auto;
+  padding: 28px 0 36px;
+  display: grid;
+  gap: 14px;
+}
+
+.panel {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(7px);
+  border-radius: 18px;
+  padding: 18px;
+  animation: rise 420ms ease both;
+}
+
+.hero {
+  background:
+    linear-gradient(138deg, rgba(241, 182, 75, 0.16), transparent 34%),
+    linear-gradient(240deg, rgba(125, 245, 168, 0.12), transparent 45%),
+    var(--panel-strong);
+}
+
+.eyebrow {
+  margin: 0;
+  color: var(--primary);
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+h1 {
+  margin: 10px 0 8px;
+  font-family: 'Manrope', 'Segoe UI', sans-serif;
+  font-size: clamp(1.7rem, 5vw, 2.6rem);
+  line-height: 1.04;
+}
+
+h2 {
+  margin: 0 0 10px;
+  font-family: 'Manrope', 'Segoe UI', sans-serif;
+  font-size: clamp(1.1rem, 3.4vw, 1.5rem);
+}
+
+h3 {
+  margin: 0 0 6px;
+  font-size: 0.84rem;
+  text-transform: uppercase;
+  color: var(--text-soft);
+  letter-spacing: 0.08em;
+}
+
+p {
+  margin: 0;
+}
+
+.lead {
+  color: var(--text-soft);
+  max-width: 66ch;
+  line-height: 1.45;
+}
+
+.pill-row {
+  margin-top: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.pill {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 5px 10px;
+  font-size: 0.78rem;
+  color: var(--text-soft);
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.pill.ok {
+  color: var(--ok);
+  border-color: rgba(125, 245, 168, 0.45);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.grid article {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 11px;
+  background: rgba(0, 0, 0, 0.19);
+}
+
+.grid p {
+  font-size: 0.92rem;
+}
+
+.current-state {
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: var(--primary);
+}
+
+.button-grid {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.button-grid.one-line {
+  grid-template-columns: 1fr;
+}
+
+.btn {
+  border: 1px solid rgba(241, 182, 75, 0.35);
+  border-radius: 12px;
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.28);
+  font-family: 'Manrope', 'Segoe UI', sans-serif;
+  font-weight: 700;
+  font-size: 0.86rem;
+  letter-spacing: 0.02em;
+  padding: 10px 12px;
+  cursor: pointer;
+  transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
+}
+
+.btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: rgba(241, 182, 75, 0.75);
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background: linear-gradient(145deg, rgba(241, 182, 75, 0.22), rgba(241, 182, 75, 0.08));
+  border-color: rgba(241, 182, 75, 0.75);
+}
+
+.btn-danger {
+  border-color: rgba(255, 127, 102, 0.75);
+  color: #ffd5cb;
+}
+
+.hint {
+  margin-top: 10px;
+  color: var(--text-soft);
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
+.route-grid {
+  margin-top: 10px;
+}
+
+.route-input {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.28);
+  color: var(--text);
+  padding: 10px 11px;
+  font-family: 'Space Grotesk', 'Segoe UI', sans-serif;
+  font-size: 0.9rem;
+}
+
+.route-input:focus {
+  outline: 2px solid rgba(241, 182, 75, 0.5);
+  outline-offset: 0;
+  border-color: rgba(241, 182, 75, 0.9);
+}
+
+.error-text {
+  margin-top: 8px;
+  color: #ffb09e;
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (max-width: 760px) {
+  .app-shell {
+    width: min(640px, 96vw);
+    padding-top: 16px;
+  }
+
+  .panel {
+    border-radius: 14px;
+    padding: 14px;
+  }
+
+  .grid,
+  .button-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .current-state {
+    font-size: 1.05rem;
+  }
+}
